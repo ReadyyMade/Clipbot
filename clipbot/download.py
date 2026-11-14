@@ -15,6 +15,7 @@ def download(url: str, out_dir: Path, name: str) -> Path:
         "no_warnings": True,
         "noplaylist": True,
         "retries": 3,
+        "socket_timeout": 30,
     }
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)

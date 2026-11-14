@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import time
 from datetime import timedelta
 from pathlib import Path
 
@@ -116,7 +117,7 @@ class Pipeline:
 
     def approve_top(self, n: int) -> int:
         done = 0
-        for row in self.db.by_status("discovered", limit=200):
+        for row in self.db.by_status("discovered", "failed", limit=200):
             if done >= n:
                 break
             done += self.approve(row["uid"])
@@ -145,11 +146,15 @@ class Pipeline:
             return Path(row["rendered_path"])
         clip = row_to_clip(row)
         safe = clip.uid.replace(":", "_")
+        log.info("baixando %s (%s)", clip.uid, clip.url)
         raw = download(clip.media_url or clip.url, self.cfg.data_dir / "raw", safe)
+        log.info("renderizando %s (%.0fs de vídeo)...", raw.name, min(clip.duration, self.cfg["render"]["max_seconds"]))
+        t0 = time.time()
         out = render_vertical(
             raw, self.cfg.data_dir / "rendered" / f"{safe}.mp4", self.cfg["render"],
             title=text.overlay_title(clip), credit=text.overlay_credit(clip),
         )
+        log.info("pronto em %.0fs: %s", time.time() - t0, out)
         self.db.set_status(clip.uid, "rendered", video_path=str(raw), rendered_path=str(out))
         return out
 

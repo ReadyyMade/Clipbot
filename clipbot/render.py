@@ -68,7 +68,7 @@ def build_command(src: Path, dst: Path, cfg: dict, title_file: Path | None,
         )
         last = "v2"
     return [
-        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "ffmpeg", "-nostdin", "-y", "-hide_banner", "-loglevel", "error",
         "-i", str(src),
         "-filter_complex", ";".join(chain),
         "-map", f"[{last}]", "-map", "0:a?",
@@ -78,6 +78,9 @@ def build_command(src: Path, dst: Path, cfg: dict, title_file: Path | None,
         "-movflags", "+faststart",
         str(dst),
     ]
+
+
+RENDER_TIMEOUT_S = 600
 
 
 def render_vertical(src: Path, dst: Path, cfg: dict, title: str = "", credit: str = "") -> Path:
@@ -98,7 +101,11 @@ def render_vertical(src: Path, dst: Path, cfg: dict, title: str = "", credit: st
             if not font_file.exists():
                 shutil.copyfile(font, font_file)
     cmd = build_command(src, dst, cfg, title_file, credit_file, font_file)
-    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=dst.parent)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, cwd=dst.parent,
+                              stdin=subprocess.DEVNULL, timeout=RENDER_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"ffmpeg passou de {RENDER_TIMEOUT_S}s renderizando {src.name}")
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg falhou: {proc.stderr.strip()[-800:]}")
     return dst
