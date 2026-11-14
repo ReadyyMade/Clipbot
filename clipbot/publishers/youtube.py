@@ -12,7 +12,11 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+# upload = enviar vídeos; readonly = só para confirmar qual canal está conectado
+SCOPES = [
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube.readonly",
+]
 
 
 class YouTubePublisher:
