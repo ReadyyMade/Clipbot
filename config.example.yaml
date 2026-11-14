@@ -1,0 +1,56 @@
+# Copie para config.yaml e ajuste.
+
+game:
+  name: "Grand Theft Auto VI"
+  twitch_game_id: ""                       # vazio = resolve pelo nome na API da Twitch
+  kick_category_slug: "grand-theft-auto-vi" # confira o slug real na URL da categoria na Kick
+
+sources:
+  twitch: true
+  kick: false            # experimental: Kick não tem API oficial de clipes
+  platform_weight:       # Kick tem audiência menor; o peso equaliza o ranking
+    twitch: 1.0
+    kick: 2.5
+
+discovery:
+  lookback_hours: 24
+  min_views: 300
+  min_duration_s: 8
+  max_duration_s: 60
+  languages: ["pt", "en"]   # vazio = todos. Clipes sem idioma (Kick) passam.
+  dedup_window_s: 120       # clipes do mesmo streamer criados nesse intervalo = mesmo momento
+  max_per_streamer_per_day: 2
+
+streamers:
+  # allowlist: só publica quem autorizou (recomendado para canal monetizado)
+  # open: qualquer streamer, exceto a blocklist
+  mode: open
+  allowlist: []            # nomes em minúsculo, ex.: ["gaules", "casimiro"]
+  blocklist: []
+
+publishing:
+  require_approval: true     # true = você aprova pelo CLI antes de postar
+  min_score_auto_approve: 0  # usado só quando require_approval=false
+  min_minutes_between_posts: 45
+  daily_limit:
+    youtube: 6               # cota padrão da YouTube Data API comporta ~6 uploads/dia
+    tiktok: 10
+  hashtags: ["#GTA6", "#GTAVI", "#GTA", "#Shorts"]
+  youtube:
+    enabled: true
+    privacy: public          # public | unlisted | private
+    category_id: "20"        # Gaming
+  tiktok:
+    enabled: true
+    privacy: SELF_ONLY       # app não auditado só pode SELF_ONLY
+
+render:
+  width: 1080
+  height: 1920
+  max_seconds: 59
+  show_title: true
+  show_credit: true
+  font_file: ""              # vazio = fonte padrão do sistema (fontconfig)
+
+paths:
+  data_dir: data

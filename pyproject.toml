@@ -1,0 +1,8 @@
+[project]
+name = "clipbot"
+version = "0.1.0"
+description = "Descobre clipes populares de GTA VI na Twitch/Kick e publica em YouTube Shorts e TikTok"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
