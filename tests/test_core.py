@@ -147,10 +147,11 @@ def test_render_vertical(tmp_path):
 
 
 def test_filter_uses_relative_textfiles():
-    from clipbot.render import build_command, ffmpeg_path
+    from clipbot.render import build_command
     cmd = build_command(Path("in.mp4"), Path("out.mp4"), DEFAULTS["render"],
-                        Path("data/rendered/a.title.txt"), Path("data/rendered/a.credit.txt"))
+                        Path("data/rendered/a.title.txt"), Path("data/rendered/a.credit.txt"),
+                        Path("data/rendered/_font.ttf"))
     graph = cmd[cmd.index("-filter_complex") + 1]
     assert "textfile='a.title.txt'" in graph and "textfile='a.credit.txt'" in graph
     assert "data/" not in graph
-    assert ffmpeg_path("C:/Windows/Fonts/arial.ttf") == "C\\:/Windows/Fonts/arial.ttf"
+    assert "fontfile='_font.ttf'" in graph

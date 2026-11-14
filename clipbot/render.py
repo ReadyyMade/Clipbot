@@ -5,24 +5,49 @@ topo = título do clipe; base = crédito do streamer. Os textos vão por arquivo
 para evitar problemas de escape com aspas, dois-pontos e emojis no drawtext.
 
 Windows: o parser de filtros do ffmpeg trata "\\" e ":" como especiais, então caminhos como
-C:\\pasta\\x.txt quebram. Por isso os textfiles são passados pelo NOME (relativo) e o ffmpeg
-roda com cwd na pasta de saída; a fonte usa barras "/" e ":" escapado.
+C:\\pasta\\x.txt quebram. Por isso textfiles e fonte (copiada para a pasta de saída) são
+passados pelo NOME e o ffmpeg roda com cwd na pasta de saída.
 """
 from __future__ import annotations
 
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
+# Fontes padrão por sistema. No Windows o ffmpeg não tem fontconfig configurado,
+# então sem fontfile o drawtext falha ("Cannot load default config file").
+FONT_CANDIDATES = [
+    "C:/Windows/Fonts/arialbd.ttf",
+    "C:/Windows/Fonts/arial.ttf",
+    "C:/Windows/Fonts/segoeuib.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    "/Library/Fonts/Arial Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+]
 
-def ffmpeg_path(path: str | Path) -> str:
-    """Caminho seguro dentro de um filtergraph (ex.: C\\:/Windows/Fonts/arial.ttf)."""
-    return Path(path).as_posix().replace(":", "\\:")
+
+def resolve_font(configured: str = "") -> Path | None:
+    """Fonte do config; senão a primeira fonte conhecida do sistema; senão None (fontconfig)."""
+    if configured:
+        if not Path(configured).exists():
+            raise FileNotFoundError(f"render.font_file não encontrado: {configured}")
+        return Path(configured)
+    for cand in FONT_CANDIDATES:
+        if Path(cand).exists():
+            return Path(cand)
+    if sys.platform == "win32":
+        raise FileNotFoundError("Nenhuma fonte encontrada; defina render.font_file no config.yaml")
+    return None
 
 
 def build_command(src: Path, dst: Path, cfg: dict, title_file: Path | None,
-                  credit_file: Path | None) -> list[str]:
+                  credit_file: Path | None, font_file: Path | None = None) -> list[str]:
+    """Arquivos de texto e fonte são referenciados só pelo NOME: o ffmpeg roda com cwd na
+    pasta de saída, o que evita escapar caminhos do Windows dentro do filtergraph."""
     w, h = int(cfg["width"]), int(cfg["height"])
-    font = f":fontfile='{ffmpeg_path(cfg['font_file'])}'" if cfg.get("font_file") else ""
+    font = f":fontfile='{font_file.name}'" if font_file else ""
     chain = [
         f"[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
         f"boxblur=20:2,eq=brightness=-0.12[bg]",
@@ -65,7 +90,14 @@ def render_vertical(src: Path, dst: Path, cfg: dict, title: str = "", credit: st
     if cfg.get("show_credit") and credit:
         credit_file = dst.with_suffix(".credit.txt")
         credit_file.write_text(credit, encoding="utf-8")
-    cmd = build_command(src, dst, cfg, title_file, credit_file)
+    font_file = None
+    if title_file or credit_file:
+        font = resolve_font(cfg.get("font_file", ""))
+        if font:
+            font_file = dst.parent / f"_font{font.suffix.lower()}"
+            if not font_file.exists():
+                shutil.copyfile(font, font_file)
+    cmd = build_command(src, dst, cfg, title_file, credit_file, font_file)
     proc = subprocess.run(cmd, capture_output=True, text=True, cwd=dst.parent)
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg falhou: {proc.stderr.strip()[-800:]}")
