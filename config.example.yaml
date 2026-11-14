@@ -20,6 +20,11 @@ discovery:
   languages: ["pt", "en"]   # vazio = todos. Clipes sem idioma (Kick) passam.
   dedup_window_s: 120       # clipes do mesmo streamer criados nesse intervalo = mesmo momento
   max_per_streamer_per_day: 2
+  max_age_hours: 36         # clipe mais velho que isso sai da fila (status "expired")
+  # Além do top global (quase todo em inglês), o bot busca os clipes de quem está ao vivo
+  # no jogo nos idiomas acima, e sempre os da allowlist. 0 desliga essa busca.
+  streamer_scan_limit: 60   # quantos streamers varrer por ciclo (maiores audiências primeiro)
+  clips_per_streamer: 20
 
 streamers:
   # allowlist: só publica quem autorizou (recomendado para canal monetizado)
@@ -31,6 +36,7 @@ streamers:
 publishing:
   require_approval: true     # true = você aprova pelo CLI antes de postar
   min_score_auto_approve: 0  # usado só quando require_approval=false
+  auto_approve_buffer: 2     # modo automático: quantos clipes ficam aprovados "na fila de saída"
   min_minutes_between_posts: 45
   daily_limit:
     youtube: 6               # cota padrão da YouTube Data API comporta ~6 uploads/dia

@@ -19,6 +19,19 @@ Kick (exp.) ┘                         (SQLite)       (você/auto)             
   (mesmo streamer, criados em até `dedup_window_s` segundos).
 - **Diversidade**: no máximo `max_per_streamer_per_day` clipes do mesmo streamer em 24h.
 - Peso por plataforma equaliza Kick (audiência menor) com Twitch.
+- **Fila honesta**: a cada busca o score é recalculado com a idade atual, e clipes com mais de
+  `max_age_hours` (36h) sem publicação expiram. A coluna `idade` do `queue` mostra isso.
+
+## Como a busca funciona
+
+A Twitch só devolve os clipes **mais vistos do mundo** por jogo, quase todos em inglês. Filtrar
+idioma depois disso deixa pouquíssimo conteúdo BR. Por isso o bot soma duas buscas:
+
+1. **Top global** do jogo (até 500 clipes).
+2. **Por streamer**: lista quem está ao vivo no jogo nos idiomas de `discovery.languages`
+   (até `streamer_scan_limit` canais, maiores audiências primeiro) e busca os clipes de cada um.
+   Quem saiu do ar continua sendo acompanhado durante a janela de busca, e os canais da
+   `streamers.allowlist` são sempre incluídos.
 
 ## Setup rápido
 
@@ -71,7 +84,9 @@ python -m clipbot stats                    # status da fila e slots restantes
 python -m clipbot export --out data/uploads.csv   # base para Power BI
 ```
 
-Modo 100% automático: `publishing.require_approval: false` no `config.yaml`.
+Modo 100% automático: `publishing.require_approval: false` no `config.yaml`. Nesse modo o bot
+aprova **just-in-time**: mantém só `auto_approve_buffer` (2) clipes aprovados por vez, para cada
+vaga ser preenchida pelo melhor clipe do momento, e não por um aprovado horas antes.
 
 Comportamentos importantes:
 - **Plataformas independentes**: se o TikTok falhar, o YouTube publica mesmo assim; o clipe fica
@@ -104,11 +119,23 @@ atende às exigências do Google (app OAuth e auditoria) e do TikTok:
 
 O bot precisa de estado persistente (SQLite + tokens) e ffmpeg, então **VPS simples > serverless**.
 
+1. Gere os tokens **no seu PC** (`scripts/youtube_auth.py` precisa de navegador) e copie para a
+   VPS as pastas/arquivos `secrets/`, `.env` e `config.yaml`.
+2. Na VPS:
+
 ```bash
 docker build -t clipbot .
-docker run -d --name clipbot --env-file .env \
+docker run -d --name clipbot --restart unless-stopped --env-file .env \
   -v $PWD/config.yaml:/app/config.yaml -v $PWD/data:/app/data -v $PWD/secrets:/app/secrets clipbot
+docker logs -f clipbot
 ```
+
+- `.env`, `secrets/`, `data/` e `config.yaml` **não entram na imagem** (`.dockerignore`): chegam
+  só por volume/variável, então a imagem pode ser compartilhada sem vazar credenciais.
+- O loop `run` não morre com erros pontuais (API fora do ar, banco ocupado): registra o erro e
+  tenta de novo no ciclo seguinte. Com 3 ciclos seguidos em erro, o log mostra um `ATENÇÃO`.
+- `--restart unless-stopped` religa o bot se a VPS reiniciar.
+- Atualize o `yt-dlp` de tempos em tempos (reconstrua a imagem): a Twitch muda e versões antigas param de baixar.
 
 ## Riscos e limites (leia antes de ligar o modo automático)
 

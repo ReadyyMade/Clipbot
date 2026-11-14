@@ -11,7 +11,7 @@ from . import text
 from .config import Config
 from .db import Database
 from .models import Clip, parse_ts, utcnow
-from .ranking import is_known_moment, rank
+from .ranking import is_known_moment, rank, score
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +31,7 @@ class Pipeline:
         self.db = db or Database(cfg.data_dir / "clipbot.sqlite3")
         self._sources = sources
         self._publishers = publishers
+        self._game_id = ""
 
     # ---------- dependências (lazy, para o CLI funcionar mesmo sem todas as credenciais) ----------
     def sources(self) -> list:
@@ -55,16 +56,61 @@ class Pipeline:
     # ---------- 1. descoberta ----------
     def fetch(self) -> list[Clip]:
         since = utcnow() - timedelta(hours=self.cfg["discovery"]["lookback_hours"])
-        clips: list[Clip] = []
+        clips: dict[str, Clip] = {}
         for src in self.sources():
             try:
                 if src.name == "twitch":
-                    game_id = self.cfg["game"]["twitch_game_id"] or src.resolve_game_id(self.cfg["game"]["name"])
-                    clips += src.fetch_clips(game_id, since)
+                    found = self._twitch_clips(src, since)
                 else:
-                    clips += [c for c in src.fetch_clips() if c.created_at >= since]
+                    found = [c for c in src.fetch_clips() if c.created_at >= since]
+                for c in found:
+                    clips.setdefault(c.uid, c)
             except Exception as e:  # uma fonte fora do ar não pode parar a outra
                 log.error("fonte %s falhou: %s", src.name, e)
+        return list(clips.values())
+
+    def _twitch_clips(self, src, since) -> list[Clip]:
+        """Duas buscas somadas:
+        1. top global do jogo (os mais vistos do mundo, quase sempre em inglês);
+        2. clipes de cada streamer que esteve ao vivo no jogo nos idiomas configurados,
+           mais a allowlist. Sem a 2, o filtro de idioma sobra com quase nada."""
+        if not self._game_id:
+            self._game_id = self.cfg["game"]["twitch_game_id"] or src.resolve_game_id(self.cfg["game"]["name"])
+        clips = list(src.fetch_clips(self._game_id, since))
+        if hasattr(src, "fetch_clips_by_broadcaster"):
+            clips += self._clips_from_streamers(src, self._game_id, since)
+        return clips
+
+    def _clips_from_streamers(self, src, game_id: str, since) -> list[Clip]:
+        d = self.cfg["discovery"]
+        limit = int(d["streamer_scan_limit"])
+        if limit <= 0:
+            return []
+        langs = [l.lower() for l in d["languages"]]
+        if langs:
+            try:
+                self.db.touch_streamers("twitch", src.fetch_live_streams(game_id, langs))
+            except Exception as e:
+                log.warning("twitch: não foi possível listar lives (%s); usando streamers já conhecidos", e)
+        # inclui quem saiu do ar nas últimas horas: o clipe continua ganhando views depois da live
+        targets = dict(self.db.recent_streamers("twitch", since, limit))
+        allow = self.cfg["streamers"]["allowlist"]
+        if allow:
+            try:
+                targets.update(src.resolve_users(allow))
+            except Exception as e:
+                log.warning("twitch: não foi possível resolver a allowlist (%s)", e)
+        clips: list[Clip] = []
+        failed = 0
+        for broadcaster_id in targets:
+            try:
+                clips += src.fetch_clips_by_broadcaster(broadcaster_id, game_id, since,
+                                                        first=int(d["clips_per_streamer"]))
+            except Exception as e:
+                failed += 1
+                log.debug("twitch: clipes de %s falharam: %s", targets[broadcaster_id], e)
+        log.info("twitch: %d clipes de %d streamers (%s)%s", len(clips), len(targets),
+                 ",".join(langs) or "allowlist", f", {failed} falhas" if failed else "")
         return clips
 
     def discover(self) -> dict:
@@ -78,10 +124,30 @@ class Pipeline:
                 rejected["mesmo momento"] = rejected.get("mesmo momento", 0) + 1
                 continue
             new += self.db.upsert_clip(clip)
+        expired = self.refresh_queue()
         auto = 0 if self.cfg["publishing"]["require_approval"] else self.auto_approve()
-        summary = {"candidatos": len(ranked), "novos": new, "auto_aprovados": auto, "descartes": rejected}
+        summary = {"candidatos": len(ranked), "novos": new, "expirados": expired,
+                   "auto_aprovados": auto, "descartes": rejected}
         log.info("discover: %s", summary)
         return summary
+
+    def refresh_queue(self) -> int:
+        """Mantém a fila honesta: o score é recalculado com a idade atual (um clipe que saiu
+        do resultado da Twitch não fica com a nota congelada) e o que passou de
+        max_age_hours sem ser publicado expira. Retorna quantos expiraram."""
+        now = utcnow()
+        max_age = timedelta(hours=self.cfg["discovery"]["max_age_hours"])
+        weights = self.cfg["sources"].get("platform_weight", {})
+        expired, rescored = [], []
+        for row in self.db.by_status("discovered", "approved", "failed", limit=100_000):
+            clip = row_to_clip(row)
+            if now - clip.created_at > max_age:
+                expired.append(clip.uid)
+            else:
+                rescored.append((score(clip, weights, now), clip.uid))
+        self.db.rescore(rescored)
+        self.db.expire(expired)
+        return len(expired)
 
     # ---------- 2. aprovação ----------
     def can_approve(self, broadcaster: str) -> bool:
@@ -107,11 +173,19 @@ class Pipeline:
         return done
 
     def auto_approve(self) -> int:
-        min_score = self.cfg["publishing"]["min_score_auto_approve"]
-        cap = max(self.cfg["publishing"]["daily_limit"].values())
+        """Aprova só o necessário para os próximos posts (just-in-time).
+
+        Aprovar tudo de uma vez criaria uma fila de dias: quando o clipe fosse ao ar já
+        estaria velho. Mantendo um estoque pequeno (auto_approve_buffer), cada vaga é
+        preenchida pelo melhor clipe do momento."""
+        pub = self.cfg["publishing"]
+        capacity = max((self.db.capacity(t, pub["daily_limit"][t]) for t in self.cfg.enabled_targets),
+                       default=0)
+        backlog = len(self.db.by_status("approved", "rendered", limit=1000))
+        slots = min(capacity, int(pub["auto_approve_buffer"])) - backlog
         done = 0
         for row in self.db.by_status("discovered", limit=200):
-            if done >= cap or (row["score"] or 0) < min_score:
+            if done >= slots or (row["score"] or 0) < pub["min_score_auto_approve"]:
                 break
             done += self.approve(row["uid"])
         return done

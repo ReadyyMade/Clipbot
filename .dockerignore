@@ -1,0 +1,18 @@
+# Nada de segredo ou estado local dentro da imagem: eles entram por volume/variável
+.env
+.env.*
+!.env.example
+secrets/
+data/
+config.yaml
+*.sqlite3
+
+# Desnecessário em produção
+.git/
+.github/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+tests/
+docs/

@@ -34,6 +34,17 @@ CREATE TABLE IF NOT EXISTS clips (
 CREATE INDEX IF NOT EXISTS ix_clips_status ON clips(status, score);
 CREATE INDEX IF NOT EXISTS ix_clips_broadcaster ON clips(broadcaster, created_at);
 
+-- Streamers vistos ao vivo no jogo (base da busca por idioma/allowlist)
+CREATE TABLE IF NOT EXISTS streamers (
+    platform       TEXT NOT NULL,
+    broadcaster_id TEXT NOT NULL,
+    name           TEXT,
+    language       TEXT,
+    viewers        INTEGER,
+    last_live_at   TEXT NOT NULL,
+    PRIMARY KEY (platform, broadcaster_id)
+);
+
 CREATE TABLE IF NOT EXISTS uploads (
     uid          TEXT NOT NULL,
     target       TEXT NOT NULL,      -- youtube | tiktok
@@ -44,8 +55,9 @@ CREATE TABLE IF NOT EXISTS uploads (
 """
 
 # Fluxo: discovered -> approved -> rendered -> published
-#                  \-> rejected            \-> failed
-STATUSES = ("discovered", "approved", "rejected", "rendered", "published", "failed")
+#            |  \-> rejected            \-> failed
+#            \-> expired (ficou velho sem ser publicado)
+STATUSES = ("discovered", "approved", "rejected", "rendered", "published", "failed", "expired")
 
 
 class Database:
@@ -56,13 +68,16 @@ class Database:
 
     # ---------- clips ----------
     def upsert_clip(self, clip: Clip) -> bool:
-        """Insere clipe novo ou atualiza views/score. Retorna True se for novo."""
+        """Insere clipe novo ou atualiza views/score. Retorna True se for novo.
+
+        updated_at NÃO muda na atualização de views: ele marca a última mudança de status,
+        e é por ele que se conta o limite diário por streamer."""
         now = utcnow().isoformat()
         exists = self.conn.execute("SELECT 1 FROM clips WHERE uid=?", (clip.uid,)).fetchone()
         if exists:
             self.conn.execute(
-                "UPDATE clips SET views=?, score=?, updated_at=? WHERE uid=?",
-                (clip.views, clip.score, now, clip.uid),
+                "UPDATE clips SET views=?, score=? WHERE uid=?",
+                (clip.views, clip.score, clip.uid),
             )
         else:
             self.conn.execute(
@@ -96,6 +111,18 @@ class Database:
             (*statuses, limit),
         ).fetchall()
 
+    def rescore(self, pairs: Iterable[tuple[float, str]]) -> None:
+        """Atualiza scores em lote [(score, uid)] sem mexer em updated_at."""
+        self.conn.executemany("UPDATE clips SET score=? WHERE uid=?", list(pairs))
+        self.conn.commit()
+
+    def expire(self, uids: Iterable[str]) -> None:
+        now = utcnow().isoformat()
+        self.conn.executemany(
+            "UPDATE clips SET status='expired', updated_at=? WHERE uid=?", [(now, u) for u in uids]
+        )
+        self.conn.commit()
+
     def queued_moments(self, broadcaster: str, platform: str) -> list[str]:
         """created_at dos clipes já conhecidos do streamer (para deduplicar o mesmo momento)."""
         rows = self.conn.execute(
@@ -111,6 +138,30 @@ class Database:
             (broadcaster, since.isoformat()),
         ).fetchone()
         return int(row["n"])
+
+    # ---------- streamers ----------
+    def touch_streamers(self, platform: str, streams: Iterable[dict]) -> None:
+        """Registra quem está ao vivo agora: [{broadcaster_id, name, language, viewers}]."""
+        now = utcnow().isoformat()
+        self.conn.executemany(
+            """INSERT INTO streamers (platform, broadcaster_id, name, language, viewers, last_live_at)
+               VALUES (?,?,?,?,?,?)
+               ON CONFLICT(platform, broadcaster_id) DO UPDATE SET
+                 name=excluded.name, language=excluded.language,
+                 viewers=excluded.viewers, last_live_at=excluded.last_live_at""",
+            [(platform, s["broadcaster_id"], s.get("name", ""), s.get("language", ""),
+              int(s.get("viewers", 0)), now) for s in streams],
+        )
+        self.conn.commit()
+
+    def recent_streamers(self, platform: str, since: datetime, limit: int) -> list[tuple[str, str]]:
+        """(broadcaster_id, name) de quem esteve ao vivo desde `since`, maiores audiências primeiro."""
+        rows = self.conn.execute(
+            """SELECT broadcaster_id, name FROM streamers WHERE platform=? AND last_live_at>=?
+               ORDER BY viewers DESC LIMIT ?""",
+            (platform, since.isoformat(), limit),
+        ).fetchall()
+        return [(r["broadcaster_id"], r["name"]) for r in rows]
 
     # ---------- uploads ----------
     def record_upload(self, uid: str, target: str, remote_id: str) -> None:

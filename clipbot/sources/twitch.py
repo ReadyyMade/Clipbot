@@ -26,6 +26,7 @@ class TwitchSource:
         self.http = session or requests.Session()
         self._token: str | None = None
         self._token_exp = 0.0
+        self._users: dict[str, tuple[str, str]] = {}  # login -> (id, nome)
 
     def _auth(self) -> str:
         if self._token and time.time() < self._token_exp - 60:
@@ -85,6 +86,44 @@ class TwitchSource:
             params["after"] = cursor
         log.info("twitch: %d clipes", len(clips))
         return clips
+
+    # ---- busca por streamer: resolve o problema de o "top global" ser quase todo em inglês ----
+    def fetch_live_streams(self, game_id: str, languages: list[str], max_pages: int = 2) -> list[dict]:
+        """Quem está ao vivo no jogo nos idiomas pedidos (maiores audiências primeiro)."""
+        params: dict = {"game_id": game_id, "type": "live", "first": 100, "language": languages[:100]}
+        out: list[dict] = []
+        for _ in range(max_pages):
+            body = self._get("/streams", params)
+            out.extend(
+                {"broadcaster_id": s["user_id"], "name": s.get("user_name", ""),
+                 "language": s.get("language", ""), "viewers": int(s.get("viewer_count", 0))}
+                for s in body.get("data", [])
+            )
+            cursor = body.get("pagination", {}).get("cursor")
+            if not cursor:
+                break
+            params["after"] = cursor
+        return out
+
+    def fetch_clips_by_broadcaster(self, broadcaster_id: str, game_id: str, started_at: datetime,
+                                   ended_at: datetime | None = None, first: int = 20) -> list[Clip]:
+        """Clipes mais vistos de um canal no período, só do jogo configurado."""
+        body = self._get("/clips", {
+            "broadcaster_id": broadcaster_id,
+            "started_at": started_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "ended_at": (ended_at or utcnow()).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "first": min(max(int(first), 1), 100),
+        })
+        return [self.parse(c) for c in body.get("data", []) if c.get("game_id") == game_id]
+
+    def resolve_users(self, logins: list[str]) -> dict[str, str]:
+        """logins -> {broadcaster_id: nome}. Usado para sempre varrer a allowlist."""
+        wanted = [l.lower().strip() for l in logins if l and l.strip()]
+        missing = [l for l in wanted if l not in self._users]
+        for i in range(0, len(missing), 100):
+            for u in self._get("/users", {"login": missing[i:i + 100]}).get("data", []):
+                self._users[u["login"].lower()] = (u["id"], u.get("display_name", u["login"]))
+        return {self._users[l][0]: self._users[l][1] for l in wanted if l in self._users}
 
     @staticmethod
     def parse(c: dict) -> Clip:

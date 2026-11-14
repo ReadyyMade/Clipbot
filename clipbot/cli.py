@@ -4,10 +4,45 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import sys
 import time
 
 from .config import Config
+from .models import parse_ts, utcnow
 from .pipeline import Pipeline
+
+log = logging.getLogger("clipbot")
+
+
+def run_cycle(p: Pipeline, dry_run: bool = False) -> bool:
+    """Um ciclo discover + process. Nunca levanta exceção: o bot 24/7 não pode morrer por
+    um erro pontual (API fora do ar, disco, banco ocupado). As duas etapas são
+    independentes: se a busca falhar, os aprovados ainda são publicados."""
+    ok = True
+    try:
+        p.discover()
+    except Exception:
+        log.exception("ciclo: a busca falhou; tentando de novo no próximo ciclo")
+        ok = False
+    try:
+        for res in p.process(dry_run=dry_run):
+            log.info("process: %s", res)
+    except Exception:
+        log.exception("ciclo: a publicação falhou; tentando de novo no próximo ciclo")
+        ok = False
+    return ok
+
+
+def run_loop(p: Pipeline, interval_min: int, once: bool = False, dry_run: bool = False,
+             sleep=time.sleep) -> int:
+    failures = 0
+    while True:
+        failures = 0 if run_cycle(p, dry_run) else failures + 1
+        if once:
+            return 1 if failures else 0
+        if failures >= 3:
+            log.error("ATENÇÃO: %d ciclos seguidos com erro. Verifique credenciais e conexão.", failures)
+        sleep(interval_min * 60)
 
 
 def cmd_queue(p: Pipeline, args) -> None:
@@ -15,11 +50,13 @@ def cmd_queue(p: Pipeline, args) -> None:
     if not rows:
         print(f"Nenhum clipe com status '{args.status}'.")
         return
-    print(f"{'score':>9}  {'views':>7}  {'dur':>4}  {'uid':<45} streamer / título")
+    now = utcnow()
+    print(f"{'score':>9}  {'views':>7}  {'dur':>4}  {'idade':>6}  {'uid':<45} streamer / título")
     for r in rows:
-        print(f"{r['score']:>9.1f}  {r['views']:>7}  {r['duration']:>4.0f}  {r['uid']:<45} "
+        age_h = (now - parse_ts(r["created_at"])).total_seconds() / 3600
+        print(f"{r['score']:>9.1f}  {r['views']:>7}  {r['duration']:>4.0f}  {age_h:>5.1f}h  {r['uid']:<45} "
               f"{r['broadcaster']} / {(r['title'] or '')[:50]}")
-        print(f"{'':>26}{r['url']}")
+        print(f"{'':>34}{r['url']}")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -68,13 +105,10 @@ def main(argv: list[str] | None = None) -> None:
     elif args.cmd == "process":
         print(json.dumps(p.process(dry_run=args.dry_run, max_items=args.max), ensure_ascii=False, indent=2))
     elif args.cmd == "run":
-        while True:
-            p.discover()
-            for res in p.process(dry_run=args.dry_run):
-                logging.info("process: %s", res)
-            if args.once:
-                break
-            time.sleep(args.interval * 60)
+        try:
+            sys.exit(run_loop(p, args.interval, args.once, args.dry_run))
+        except KeyboardInterrupt:
+            print("\nEncerrado pelo usuário.")
     elif args.cmd == "stats":
         caps = {t: p.db.capacity(t, p.cfg["publishing"]["daily_limit"][t]) for t in p.cfg.enabled_targets}
         print(json.dumps({"por_status": p.db.stats(), "slots_restantes_24h": caps}, indent=2, ensure_ascii=False))
