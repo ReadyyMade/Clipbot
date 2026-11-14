@@ -47,27 +47,10 @@ class Pipeline:
         return out
 
     def publishers(self) -> dict:
-        if self._publishers is not None:
-            return self._publishers
-        pub = self.cfg["publishing"]
-        out = {}
-        if pub["youtube"]["enabled"]:
-            from .publishers.youtube import YouTubePublisher
-
-            out["youtube"] = YouTubePublisher(
-                Config.env("YOUTUBE_TOKEN_FILE", "secrets/youtube_token.json"),
-                pub["youtube"]["privacy"], pub["youtube"]["category_id"],
-            )
-        if pub["tiktok"]["enabled"]:
-            from .publishers.tiktok import TikTokPublisher
-
-            out["tiktok"] = TikTokPublisher(
-                Config.env("TIKTOK_TOKEN_FILE", "secrets/tiktok_token.json"),
-                Config.env("TIKTOK_CLIENT_KEY"), Config.env("TIKTOK_CLIENT_SECRET"),
-                pub["tiktok"]["privacy"],
-            )
-        self._publishers = out
-        return out
+        """Publishers criados sob demanda: credencial ausente vira erro só daquela plataforma."""
+        if self._publishers is None:
+            self._publishers = _LazyPublishers(self.cfg)
+        return self._publishers
 
     # ---------- 1. descoberta ----------
     def fetch(self) -> list[Clip]:
@@ -165,20 +148,25 @@ class Pipeline:
         last = self.db.last_upload_at(target)
         return not last or utcnow() - last >= timedelta(minutes=pub["min_minutes_between_posts"])
 
-    def publish(self, row: sqlite3.Row, video: Path, targets: list[str]) -> list[str]:
+    def publish(self, row: sqlite3.Row, video: Path, targets: list[str]) -> tuple[list[str], dict[str, str]]:
+        """Publica em cada plataforma de forma independente: se uma falhar, as outras seguem."""
         clip = row_to_clip(row)
         tags = self.cfg["publishing"]["hashtags"]
-        done = []
+        done, errors = [], {}
         for target in targets:
-            pub = self.publishers()[target]
-            if target == "youtube":
-                remote = pub.upload(video, text.youtube_title(clip, tags),
-                                    text.description(clip, tags), text.tags(clip, tags))
-            else:
-                remote = pub.upload(video, text.tiktok_caption(clip, tags))
-            self.db.record_upload(clip.uid, target, remote)
-            done.append(target)
-        return done
+            try:
+                pub = self.publishers()[target]
+                if target == "youtube":
+                    remote = pub.upload(video, text.youtube_title(clip, tags),
+                                        text.description(clip, tags), text.tags(clip, tags))
+                else:
+                    remote = pub.upload(video, text.tiktok_caption(clip, tags))
+                self.db.record_upload(clip.uid, target, remote)
+                done.append(target)
+            except Exception as e:
+                log.error("%s: falha no %s: %s", clip.uid, target, e)
+                errors[target] = str(e)[:300]
+        return done, errors
 
     def process(self, dry_run: bool = False, max_items: int = 1) -> list[dict]:
         """Processa até max_items clipes aprovados respeitando cota diária e intervalo entre posts."""
@@ -187,17 +175,58 @@ class Pipeline:
             if len(results) >= max_items:
                 break
             pending = [t for t in self.cfg.enabled_targets if t not in self.db.uploaded_targets(row["uid"])]
+            if not pending and not dry_run:
+                self.db.set_status(row["uid"], "published", error=None)
+                continue
             targets = pending if dry_run else [t for t in pending if self.target_ready(t)]
             if not targets:
                 continue
             try:
                 video = self.prepare(row)
-                done = [] if dry_run else self.publish(self.db.get(row["uid"]), video, targets)
-                if not dry_run and set(self.cfg.enabled_targets) <= self.db.uploaded_targets(row["uid"]):
-                    self.db.set_status(row["uid"], "published")
-                results.append({"uid": row["uid"], "video": str(video), "publicado_em": done})
             except Exception as e:
-                log.exception("falha em %s", row["uid"])
+                log.exception("falha ao preparar %s", row["uid"])
                 self.db.set_status(row["uid"], "failed", error=str(e)[:500])
                 results.append({"uid": row["uid"], "erro": str(e)[:200]})
+                continue
+            if dry_run:
+                results.append({"uid": row["uid"], "video": str(video), "publicado_em": []})
+                continue
+            done, errors = self.publish(self.db.get(row["uid"]), video, targets)
+            if set(self.cfg.enabled_targets) <= self.db.uploaded_targets(row["uid"]):
+                self.db.set_status(row["uid"], "published", error=None)
+            elif errors:
+                # continua 'rendered': o próximo ciclo tenta só as plataformas que faltaram
+                self.db.set_status(row["uid"], "rendered", error="; ".join(f"{k}: {v}" for k, v in errors.items())[:500])
+            res = {"uid": row["uid"], "video": str(video), "publicado_em": done}
+            if errors:
+                res["erros"] = errors
+            results.append(res)
         return results
+
+
+class _LazyPublishers(dict):
+    def __init__(self, cfg: Config):
+        super().__init__()
+        self.cfg = cfg
+
+    def __missing__(self, target: str):
+        pub = self.cfg["publishing"]
+        if target == "youtube":
+            from .publishers.youtube import YouTubePublisher
+
+            obj = YouTubePublisher(
+                Config.env("YOUTUBE_TOKEN_FILE", "secrets/youtube_token.json"),
+                pub["youtube"]["privacy"], pub["youtube"]["category_id"],
+            )
+        elif target == "tiktok":
+            from .publishers.tiktok import TikTokPublisher
+
+            obj = TikTokPublisher(
+                Config.env("TIKTOK_TOKEN_FILE", "secrets/tiktok_token.json"),
+                Config.env("TIKTOK_CLIENT_KEY"), Config.env("TIKTOK_CLIENT_SECRET"),
+                pub["tiktok"]["privacy"],
+            )
+        else:
+            raise KeyError(target)
+        self[target] = obj
+        return obj

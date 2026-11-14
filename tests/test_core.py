@@ -155,3 +155,23 @@ def test_filter_uses_relative_textfiles():
     assert "textfile='a.title.txt'" in graph and "textfile='a.credit.txt'" in graph
     assert "data/" not in graph
     assert "fontfile='_font.ttf'" in graph
+
+
+class BrokenPublisher:
+    def upload(self, *a):
+        raise RuntimeError("sem token")
+
+
+def test_one_platform_failing_does_not_block_other(tmp_path, monkeypatch):
+    c = Config(cfg(paths={"data_dir": str(tmp_path)}, publishing={"min_minutes_between_posts": 0}))
+    yt = FakePublisher()
+    p = Pipeline(c, Database(tmp_path / "t.db"), sources=[FakeSource([mk("a", views=5000)])],
+                 publishers={"youtube": yt, "tiktok": BrokenPublisher()})
+    p.discover(); p.approve_top(1)
+    monkeypatch.setattr(p, "prepare", lambda row: tmp_path / "a.mp4")
+    res = p.process()
+    assert res[0]["publicado_em"] == ["youtube"] and "tiktok" in res[0]["erros"]
+    assert p.db.get("twitch:a")["status"] == "rendered"
+    p._publishers["tiktok"] = FakePublisher()
+    p.process()                                   # retenta só o TikTok
+    assert len(yt.calls) == 1 and p.db.get("twitch:a")["status"] == "published"
