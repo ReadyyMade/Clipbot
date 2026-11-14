@@ -33,7 +33,7 @@ DEFAULTS: dict[str, Any] = {
         "width": 1080,
         "height": 1920,
         "max_seconds": 59,
-        "zoom": 1.3,
+        "zoom": 1.0,
         "show_title": True,
         "show_credit": True,
         "font_file": "",
