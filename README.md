@@ -109,12 +109,12 @@ desfocado, título no topo e crédito `twitch.tv/streamer` embaixo.
 
 ## Site (privacidade e termos)
 
-A pasta `docs/` é publicada pelo GitHub Pages em https://henriiikk.github.io/Clipbot/ e
+A pasta `docs/` é publicada pelo GitHub Pages em https://readyymade.github.io/Clipbot/ e
 atende às exigências do Google (app OAuth e auditoria) e do TikTok:
 
-- Início: `https://henriiikk.github.io/Clipbot/`
-- Privacidade: `https://henriiikk.github.io/Clipbot/privacy.html`
-- Termos: `https://henriiikk.github.io/Clipbot/terms.html`
+- Início: `https://readyymade.github.io/Clipbot/`
+- Privacidade: `https://readyymade.github.io/Clipbot/privacy.html`
+- Termos: `https://readyymade.github.io/Clipbot/terms.html`
 
 ## Deploy (24/7)
 
