@@ -322,3 +322,24 @@ def test_auto_approve_keeps_small_buffer(tmp_path, monkeypatch):
     p.process()
     assert p.discover()["auto_aprovados"] == 1               # repõe só a vaga usada
     assert len(p.db.by_status("approved", "rendered")) == 2
+
+
+# ---------- filtros valem também para o que já está na fila ----------
+def test_queue_respects_current_filters(tmp_path, capsys):
+    from clipbot.cli import cmd_queue
+    from types import SimpleNamespace
+
+    db = Database(tmp_path / "t.db")
+    clips = [mk("jp", views=9000, lang="ja", who="Mitsuki"), mk("br", views=800, lang="pt")]
+    wide = Pipeline(Config(cfg(paths={"data_dir": str(tmp_path)}, discovery={"languages": []})), db,
+                    sources=[FakeSource(clips)], publishers={})
+    assert wide.discover()["novos"] == 2                      # demonstração: todos os idiomas
+
+    pt = Pipeline(Config(cfg(paths={"data_dir": str(tmp_path)}, discovery={"languages": ["pt"]})), db,
+                  sources=[FakeSource([])], publishers={})
+    assert [r["clip_id"] for r in pt.candidates()] == ["br"]
+    cmd_queue(pt, SimpleNamespace(status="discovered", limit=20, all=False))
+    out = capsys.readouterr().out
+    assert "twitch:br" in out and "twitch:jp" not in out and "1 clipe(s) fora dos filtros" in out
+    assert pt.approve_top(5) == 1 and db.get("twitch:jp")["status"] == "discovered"
+    assert pt.approve("twitch:jp") is True                    # aprovação manual por ID continua possível

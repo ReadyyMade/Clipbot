@@ -11,7 +11,7 @@ from . import text
 from .config import Config
 from .db import Database
 from .models import Clip, parse_ts, utcnow
-from .ranking import is_known_moment, rank, score
+from .ranking import is_known_moment, passes_filters, rank, score
 
 log = logging.getLogger(__name__)
 
@@ -149,6 +149,20 @@ class Pipeline:
         self.db.expire(expired)
         return len(expired)
 
+    def candidates(self, *statuses: str, limit: int = 50) -> list[sqlite3.Row]:
+        """Clipes da fila que passam nos filtros ATUAIS do config, melhores primeiro.
+
+        Os filtros valem na entrada E na saída: se você muda idioma, views mínimas ou
+        blocklist no config.yaml, a fila reflete na hora, sem apagar nada do banco
+        (um clipe abaixo do mínimo de views volta a aparecer se crescer)."""
+        out = []
+        for row in self.db.by_status(*(statuses or ("discovered",)), limit=100_000):
+            if passes_filters(row_to_clip(row), self.cfg.data)[0]:
+                out.append(row)
+                if len(out) >= limit:
+                    break
+        return out
+
     # ---------- 2. aprovação ----------
     def can_approve(self, broadcaster: str) -> bool:
         limit = self.cfg["discovery"]["max_per_streamer_per_day"]
@@ -166,7 +180,7 @@ class Pipeline:
 
     def approve_top(self, n: int) -> int:
         done = 0
-        for row in self.db.by_status("discovered", "failed", limit=200):
+        for row in self.candidates("discovered", "failed", limit=200):
             if done >= n:
                 break
             done += self.approve(row["uid"])
@@ -184,7 +198,7 @@ class Pipeline:
         backlog = len(self.db.by_status("approved", "rendered", limit=1000))
         slots = min(capacity, int(pub["auto_approve_buffer"])) - backlog
         done = 0
-        for row in self.db.by_status("discovered", limit=200):
+        for row in self.candidates("discovered", limit=200):
             if done >= slots or (row["score"] or 0) < pub["min_score_auto_approve"]:
                 break
             done += self.approve(row["uid"])

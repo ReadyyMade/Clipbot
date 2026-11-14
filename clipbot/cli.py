@@ -46,9 +46,18 @@ def run_loop(p: Pipeline, interval_min: int, once: bool = False, dry_run: bool =
 
 
 def cmd_queue(p: Pipeline, args) -> None:
-    rows = p.db.by_status(args.status, limit=args.limit)
+    hidden = 0
+    if args.status == "discovered" and not args.all:
+        rows = p.candidates("discovered", limit=args.limit)
+        hidden = p.db.stats().get("discovered", 0) - len(p.candidates("discovered", limit=100_000))
+    else:
+        rows = p.db.by_status(args.status, limit=args.limit)
+    note = (f"({hidden} clipe(s) fora dos filtros atuais do config.yaml estão ocultos; "
+            f"use --all para ver)") if hidden else ""
     if not rows:
-        print(f"Nenhum clipe com status '{args.status}'.")
+        print(f"Nenhum clipe com status '{args.status}'" + (" dentro dos filtros atuais." if hidden else "."))
+        if note:
+            print(note)
         return
     now = utcnow()
     print(f"{'score':>9}  {'views':>7}  {'dur':>4}  {'idade':>6}  {'uid':<45} streamer / título")
@@ -57,6 +66,8 @@ def cmd_queue(p: Pipeline, args) -> None:
         print(f"{r['score']:>9.1f}  {r['views']:>7}  {r['duration']:>4.0f}  {age_h:>5.1f}h  {r['uid']:<45} "
               f"{r['broadcaster']} / {(r['title'] or '')[:50]}")
         print(f"{'':>34}{r['url']}")
+    if note:
+        print("\n" + note)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -69,6 +80,7 @@ def main(argv: list[str] | None = None) -> None:
     q = sub.add_parser("queue", help="lista a fila")
     q.add_argument("--status", default="discovered")
     q.add_argument("--limit", type=int, default=20)
+    q.add_argument("--all", action="store_true", help="inclui clipes fora dos filtros atuais")
     a = sub.add_parser("approve", help="aprova clipes para publicação")
     a.add_argument("uids", nargs="*")
     a.add_argument("--top", type=int, default=0, help="aprova os N melhores da fila")
