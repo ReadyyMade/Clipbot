@@ -3,6 +3,10 @@
 Layout: fundo = o próprio vídeo ampliado e desfocado; centro = vídeo original inteiro;
 topo = título do clipe; base = crédito do streamer. Os textos vão por arquivo (textfile=)
 para evitar problemas de escape com aspas, dois-pontos e emojis no drawtext.
+
+Windows: o parser de filtros do ffmpeg trata "\\" e ":" como especiais, então caminhos como
+C:\\pasta\\x.txt quebram. Por isso os textfiles são passados pelo NOME (relativo) e o ffmpeg
+roda com cwd na pasta de saída; a fonte usa barras "/" e ":" escapado.
 """
 from __future__ import annotations
 
@@ -10,10 +14,15 @@ import subprocess
 from pathlib import Path
 
 
+def ffmpeg_path(path: str | Path) -> str:
+    """Caminho seguro dentro de um filtergraph (ex.: C\\:/Windows/Fonts/arial.ttf)."""
+    return Path(path).as_posix().replace(":", "\\:")
+
+
 def build_command(src: Path, dst: Path, cfg: dict, title_file: Path | None,
                   credit_file: Path | None) -> list[str]:
     w, h = int(cfg["width"]), int(cfg["height"])
-    font = f":fontfile='{cfg['font_file']}'" if cfg.get("font_file") else ""
+    font = f":fontfile='{ffmpeg_path(cfg['font_file'])}'" if cfg.get("font_file") else ""
     chain = [
         f"[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
         f"boxblur=20:2,eq=brightness=-0.12[bg]",
@@ -23,13 +32,13 @@ def build_command(src: Path, dst: Path, cfg: dict, title_file: Path | None,
     last = "v0"
     if title_file:
         chain.append(
-            f"[{last}]drawtext=textfile='{title_file}'{font}:fontcolor=white:fontsize={w // 16}"
+            f"[{last}]drawtext=textfile='{title_file.name}'{font}:fontcolor=white:fontsize={w // 16}"
             f":line_spacing=12:borderw=5:bordercolor=black:x=(w-text_w)/2:y=h*0.13[v1]"
         )
         last = "v1"
     if credit_file:
         chain.append(
-            f"[{last}]drawtext=textfile='{credit_file}'{font}:fontcolor=white:fontsize={w // 24}"
+            f"[{last}]drawtext=textfile='{credit_file.name}'{font}:fontcolor=white:fontsize={w // 24}"
             f":box=1:boxcolor=black@0.55:boxborderw=18:x=(w-text_w)/2:y=h*0.80[v2]"
         )
         last = "v2"
@@ -47,6 +56,7 @@ def build_command(src: Path, dst: Path, cfg: dict, title_file: Path | None,
 
 
 def render_vertical(src: Path, dst: Path, cfg: dict, title: str = "", credit: str = "") -> Path:
+    src, dst = Path(src).resolve(), Path(dst).resolve()
     dst.parent.mkdir(parents=True, exist_ok=True)
     title_file = credit_file = None
     if cfg.get("show_title") and title:
@@ -56,7 +66,7 @@ def render_vertical(src: Path, dst: Path, cfg: dict, title: str = "", credit: st
         credit_file = dst.with_suffix(".credit.txt")
         credit_file.write_text(credit, encoding="utf-8")
     cmd = build_command(src, dst, cfg, title_file, credit_file)
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=dst.parent)
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg falhou: {proc.stderr.strip()[-800:]}")
     return dst

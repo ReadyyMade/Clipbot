@@ -144,3 +144,13 @@ def test_render_vertical(tmp_path):
                             "stream=width,height", "-of", "csv=p=0", str(out)],
                            capture_output=True, text=True, check=True).stdout.strip()
     assert probe == "1080,1920"
+
+
+def test_filter_uses_relative_textfiles():
+    from clipbot.render import build_command, ffmpeg_path
+    cmd = build_command(Path("in.mp4"), Path("out.mp4"), DEFAULTS["render"],
+                        Path("data/rendered/a.title.txt"), Path("data/rendered/a.credit.txt"))
+    graph = cmd[cmd.index("-filter_complex") + 1]
+    assert "textfile='a.title.txt'" in graph and "textfile='a.credit.txt'" in graph
+    assert "data/" not in graph
+    assert ffmpeg_path("C:/Windows/Fonts/arial.ttf") == "C\\:/Windows/Fonts/arial.ttf"
