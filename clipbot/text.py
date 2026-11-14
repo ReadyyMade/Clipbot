@@ -53,7 +53,7 @@ def tags(clip: Clip, hashtags: list[str]) -> list[str]:
     return out
 
 
-def overlay_title(clip: Clip, width_chars: int = 26, max_lines: int = 3) -> str:
+def overlay_title(clip: Clip, width_chars: int = 22, max_lines: int = 3) -> str:
     lines = textwrap.wrap(clean(clip.title).upper(), width_chars)[:max_lines]
     return "\n".join(lines)
 

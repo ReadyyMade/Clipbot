@@ -48,9 +48,10 @@ render:
   width: 1080
   height: 1920
   max_seconds: 59
+  zoom: 1.3                  # 1.0 = vídeo inteiro; 1.3 = corta ~23% das laterais; máx 1.78
   show_title: true
   show_credit: true
-  font_file: ""              # vazio = fonte padrão do sistema (fontconfig)
+  font_file: ""              # vazio = detecta (Windows: Arial Negrito)
 
 paths:
   data_dir: data

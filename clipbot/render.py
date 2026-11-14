@@ -47,18 +47,21 @@ def build_command(src: Path, dst: Path, cfg: dict, title_file: Path | None,
     """Arquivos de texto e fonte são referenciados só pelo NOME: o ffmpeg roda com cwd na
     pasta de saída, o que evita escapar caminhos do Windows dentro do filtergraph."""
     w, h = int(cfg["width"]), int(cfg["height"])
+    zoom = min(max(float(cfg.get("zoom", 1.0)), 1.0), 1.78)  # 1.78 = preenche como 9:16 puro
+    zw = int(w * zoom) // 2 * 2
     font = f":fontfile='{font_file.name}'" if font_file else ""
     chain = [
         f"[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
         f"boxblur=20:2,eq=brightness=-0.12[bg]",
-        f"[0:v]scale={w}:-2[fg]",
+        # zoom > 1 amplia o vídeo central e corta as laterais (mais área útil na tela vertical)
+        f"[0:v]scale={zw}:-2,crop={w}:ih[fg]",
         "[bg][fg]overlay=(W-w)/2:(H-h)/2[v0]",
     ]
     last = "v0"
     if title_file:
         chain.append(
             f"[{last}]drawtext=textfile='{title_file.name}'{font}:fontcolor=white:fontsize={w // 16}"
-            f":line_spacing=12:borderw=5:bordercolor=black:x=(w-text_w)/2:y=h*0.13[v1]"
+            f":line_spacing=12:borderw=5:bordercolor=black:x=(w-text_w)/2:y=h*0.09[v1]"
         )
         last = "v1"
     if credit_file:
