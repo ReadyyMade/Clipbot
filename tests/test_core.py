@@ -343,3 +343,19 @@ def test_queue_respects_current_filters(tmp_path, capsys):
     assert "twitch:br" in out and "twitch:jp" not in out and "1 clipe(s) fora dos filtros" in out
     assert pt.approve_top(5) == 1 and db.get("twitch:jp")["status"] == "discovered"
     assert pt.approve("twitch:jp") is True                    # aprovação manual por ID continua possível
+
+
+def test_clear_keeps_published_history(tmp_path):
+    db = Database(tmp_path / "t.db")
+    for cid in ("a", "b", "c", "d"):
+        db.upsert_clip(mk(cid, who=f"S{cid}"))
+    db.set_status("twitch:b", "published")
+    db.record_upload("twitch:b", "youtube", "yt1")
+    db.set_status("twitch:c", "approved")
+    db.set_status("twitch:d", "expired")
+    assert db.clear(["discovered", "expired", "published", "approved"]) == 2   # protegidos ignorados
+    assert db.get("twitch:a") is None and db.get("twitch:d") is None
+    assert db.get("twitch:b")["status"] == "published" and db.uploaded_targets("twitch:b") == {"youtube"}
+    assert db.get("twitch:c")["status"] == "approved"
+    # um clipe já publicado que reaparece na busca não volta para a fila
+    assert db.upsert_clip(mk("b", who="Sb")) is False and db.get("twitch:b")["status"] == "published"

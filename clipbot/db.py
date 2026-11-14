@@ -192,6 +192,19 @@ class Database:
         return max(0, daily_limit - self.uploads_since(target, utcnow() - timedelta(hours=24)))
 
     # ---------- relatórios ----------
+    # Nunca apagáveis pelo clear: perder esse histórico faria o bot repostar o mesmo clipe
+    PROTECTED = ("approved", "rendered", "published")
+
+    def clear(self, statuses: Iterable[str]) -> int:
+        """Apaga clipes da fila nos status pedidos. Status protegidos são ignorados."""
+        statuses = [st for st in statuses if st in STATUSES and st not in self.PROTECTED]
+        if not statuses:
+            return 0
+        marks = ",".join("?" * len(statuses))
+        cur = self.conn.execute(f"DELETE FROM clips WHERE status IN ({marks})", statuses)
+        self.conn.commit()
+        return cur.rowcount
+
     def stats(self) -> dict[str, int]:
         rows = self.conn.execute("SELECT status, COUNT(*) AS n FROM clips GROUP BY status").fetchall()
         return {r["status"]: r["n"] for r in rows}

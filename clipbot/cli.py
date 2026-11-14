@@ -94,6 +94,11 @@ def main(argv: list[str] | None = None) -> None:
     run.add_argument("--interval", type=int, default=15, help="minutos entre ciclos")
     run.add_argument("--once", action="store_true")
     run.add_argument("--dry-run", action="store_true")
+    cl = sub.add_parser("clear", help="apaga clipes da fila (nunca os aprovados/publicados)")
+    cl.add_argument("--status", nargs="+", default=["discovered", "expired", "rejected"],
+                    choices=["discovered", "expired", "rejected", "failed"],
+                    help="quais status apagar (padrão: discovered expired rejected)")
+    cl.add_argument("--yes", action="store_true", help="não pede confirmação")
     sub.add_parser("stats", help="contagem por status e uploads em 24h")
     ex = sub.add_parser("export", help="exporta uploads para CSV (Power BI/Excel)")
     ex.add_argument("--out", default="data/uploads.csv")
@@ -121,6 +126,18 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(run_loop(p, args.interval, args.once, args.dry_run))
         except KeyboardInterrupt:
             print("\nEncerrado pelo usuário.")
+    elif args.cmd == "clear":
+        counts = p.db.stats()
+        total = sum(counts.get(st, 0) for st in args.status)
+        if not total:
+            print("Nada para apagar.")
+            return
+        print(f"Vai apagar {total} clipe(s): " + ", ".join(f"{st}={counts.get(st, 0)}" for st in args.status))
+        print("Aprovados, renderizados e publicados são mantidos (o bot não reposta o que já foi ao ar).")
+        if not args.yes and input("Confirmar? [s/N] ").strip().lower() not in ("s", "sim", "y", "yes"):
+            print("Cancelado.")
+            return
+        print(f"{p.db.clear(args.status)} clipe(s) apagado(s).")
     elif args.cmd == "stats":
         caps = {t: p.db.capacity(t, p.cfg["publishing"]["daily_limit"][t]) for t in p.cfg.enabled_targets}
         print(json.dumps({"por_status": p.db.stats(), "slots_restantes_24h": caps}, indent=2, ensure_ascii=False))

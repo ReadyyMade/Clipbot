@@ -80,6 +80,7 @@ python -m clipbot reject  twitch:XyZ
 python -m clipbot process --dry-run        # só renderiza em data/rendered/ para conferir
 python -m clipbot process --max 2          # publica de verdade
 python -m clipbot run --interval 15        # loop contínuo
+python -m clipbot clear                    # limpa a fila (mantém aprovados e publicados)
 python -m clipbot stats                    # status da fila e slots restantes
 python -m clipbot export --out data/uploads.csv   # base para Power BI
 ```
